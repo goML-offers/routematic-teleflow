@@ -1,0 +1,19 @@
+# This is a reusable Dockerfile for all tool Lambdas.
+# Build context should be the project root (ran_copilot_agentcore).
+# Example: docker build --build-arg TOOL_PATH=tools/analytics_detect_anomalies -f src/tools/Dockerfile.lambda -t analytics-tool .
+
+FROM public.ecr.aws/lambda/python:3.12
+
+# This argument is passed in at build time
+ARG TOOL_PATH
+
+# Copy the shared library and the specific tool's code
+COPY src/shared/ ${LAMBDA_TASK_ROOT}/shared
+COPY src/${TOOL_PATH}/ ${LAMBDA_TASK_ROOT}/
+
+# Copy and install requirements
+COPY src/requirements.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt
+
+# The handler for every tool is assumed to be main.handler
+CMD [ "main.handler" ]

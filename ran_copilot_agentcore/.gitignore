@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+.env
+.venv/
+venv/
+_package/
+agent_lambda_package.zip
+tool_lambda_package.zip
+*.csv
