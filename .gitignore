@@ -1,0 +1,19 @@
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+plan.md
+
+# datasets
+datasets/
+
+# logs
+logs/
+
+# results
+results/
+
+# models
+models/
