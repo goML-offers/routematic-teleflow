@@ -2,34 +2,60 @@
 RAN Co-pilot Agent - FastAPI Implementation for AgentCore Runtime
 Uses AWS-managed AgentCore Gateway for 8 tools + direct Lambda for 5 tools.
 """
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
-from datetime import datetime, timezone
+import os
 import json
 import logging
-import boto3
-import os
 import httpx
+import boto3
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, '/app')
 
 from strands import Agent, tool
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
-app = FastAPI(title="RAN Co-pilot Agent", version="1.0.0")
+# Check for AWS credentials
+logger.info("Checking AWS credentials...")
+logger.info(f"AWS_ACCESS_KEY_ID present: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}")
+logger.info(f"AWS_SECRET_ACCESS_KEY present: {bool(os.getenv('AWS_SECRET_ACCESS_KEY'))}")
+logger.info(f"AWS_REGION: {os.getenv('AWS_REGION', 'ap-south-1')}")
 
-# Initialize AWS Lambda client
-lambda_client = boto3.client('lambda', region_name=os.getenv('AWS_REGION', 'ap-south-1'))
+# FastAPI app
+app = FastAPI(title="RAN Co-pilot Agent")
 
-# ============================================================================
-# Gateway Configuration
-# ============================================================================
+# Add CORS middleware for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-GATEWAY_ARN = "arn:aws:bedrock-agentcore:ap-south-1:767828738296:gateway/ran-copilot-gateway-gqw1ckcenk"
-GATEWAY_ENDPOINT = "https://ran-copilot-gateway-gqw1ckcenk.gateway.bedrock-agentcore.ap-south-1.amazonaws.com/mcp"
+# AWS clients
+bedrock_client = boto3.client('bedrock-runtime', region_name=os.getenv('AWS_REGION', 'ap-south-1'))
+athena_client = boto3.client('athena', region_name=os.getenv('AWS_REGION', 'ap-south-1'))
+s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'ap-south-1'))
+
+# Gateway configuration
+GATEWAY_ARN = os.getenv('GATEWAY_ARN', 'arn:aws:bedrock-agentcore:ap-south-1:767828738296:gateway/ran-copilot-gateway-gqw1ckcenk')
+GATEWAY_ENDPOINT = os.getenv('GATEWAY_ENDPOINT', 'https://ran-copilot-gateway-gqw1ckcenk.gateway.bedrock-agentcore.ap-south-1.amazonaws.com/mcp')
 
 # Tools available through Gateway (8)
 GATEWAY_TOOLS = {
@@ -82,12 +108,11 @@ def invoke_lambda_tool(function_name: str, payload: Dict[str, Any]) -> Dict[str,
     """Invoke tool directly via Lambda."""
     try:
         logger.info(f"Invoking Lambda tool: {function_name}")
-        response = lambda_client.invoke(
-            FunctionName=function_name,
-            InvocationType='RequestResponse',
-            Payload=json.dumps(payload)
+        response = bedrock_client.invoke_model(
+            modelId="amazon.nova-pro-v1:0",
+            body=json.dumps(payload)
         )
-        response_payload = json.loads(response['Payload'].read())
+        response_payload = json.loads(response['body'].read())
         logger.info(f"Lambda tool response: {response_payload}")
         return response_payload
     except Exception as e:
@@ -222,54 +247,22 @@ def recommend_preventive_maintenance() -> dict:
     result = asyncio.run(invoke_gateway_tool("recommend-preventive-maintenance", {}))
     return result
 
-# Initialize Strands Agent with all 13 tools
-logger.info("Initializing Strands Agent with 13 tools (8 Gateway + 5 Lambda)...")
+# Initialize Strands Agent
+logger.info("Initializing Strands Agent...")
 try:
-    strands_agent = Agent(
-        system_prompt="""You are an intelligent RAN Co-pilot assistant for Radio Access Network (RAN) engineers.
-
-Your capabilities include:
-- ANALYTICS: Detect performance anomalies, find degraded clusters, correlate customer experience metrics, detect congestion, generate heatmaps
-- RECOMMENDATIONS: Root cause analysis, simulate parameter impacts, generate optimization recommendations  
-- AUTOMATION: Create trouble tickets, generate configuration scripts
-- FORECASTING: Forecast traffic for events, predict equipment faults, recommend preventive maintenance
-
-You have access to 13 tools:
-- 8 tools through AgentCore Gateway (MCP protocol)
-- 5 tools via direct Lambda invocation
-
-Help analyze network performance, identify issues, provide recommendations, and enable proactive network management.
-Always provide structured, actionable insights backed by data.""",
-        tools=[
-            # Analytics
-            detect_performance_anomalies,
-            find_degraded_clusters,
-            correlate_cem_with_kpi,
-            detect_slice_congestion,
-            get_heatmap_data,
-            # Recommendations
-            perform_root_cause_analysis,
-            simulate_parameter_impact,
-            generate_optimization_recommendations,
-            # Automation
-            create_trouble_ticket,
-            generate_configuration_script,
-            # Forecasting
-            forecast_traffic_for_event,
-            predict_equipment_faults,
-            recommend_preventive_maintenance
-        ]
-    )
-    logger.info("✓ Strands Agent initialized successfully!")
+    agent = Agent(model="amazon.nova-pro-v1:0")
+    logger.info("Strands Agent initialized successfully")
 except Exception as e:
-    logger.error(f"✗ Failed to initialize Strands Agent: {e}")
-    import traceback
-    traceback.print_exc()
-    strands_agent = None
+    logger.error(f"Failed to initialize Strands Agent: {e}")
+    agent = None
 
 # ============================================================================
 # Models & Endpoints
 # ============================================================================
+
+class PingResponse(BaseModel):
+    status: str
+    timestamp: str
 
 class InvocationRequest(BaseModel):
     input: Dict[str, Any]
@@ -277,53 +270,219 @@ class InvocationRequest(BaseModel):
 class InvocationResponse(BaseModel):
     output: Dict[str, Any]
 
-@app.get("/ping")
+class DashboardKPI(BaseModel):
+    rrc_success_rate: float
+    active_cells: int
+    critical_alarms: int
+    network_load: float
+    status: str  # Operational, Degraded, Critical
+
+class CellStatus(BaseModel):
+    cell_id: str
+    latitude: float
+    longitude: float
+    status: str
+    load_percentage: float
+    rrc_success_rate: float
+
+class TimeSeriesData(BaseModel):
+    timestamp: str
+    rrc_success_rate: float
+    handover_success_rate: float
+    throughput_mbps: float
+
+class CellPerformance(BaseModel):
+    cell_id: str
+    rrc_success_rate: float
+    handover_success_rate: float
+    network_load: float
+    active_alarms: int
+    status: str
+
+# REST API Endpoints
+
+@app.get("/ping", response_model=PingResponse)
 async def ping():
-    """Health check endpoint."""
-    logger.info("Ping received")
-    return {"status": "healthy"}
+    """Health check endpoint"""
+    return PingResponse(
+        status="healthy",
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
 
 @app.post("/invocations", response_model=InvocationResponse)
-async def invoke_agent(request: InvocationRequest):
-    """Main invocation endpoint for the Bedrock AgentCore Runtime."""
-    logger.info("=" * 60)
-    logger.info("INVOCATIONS ENDPOINT CALLED")
-    logger.info("=" * 60)
-    
+async def invocations(request: InvocationRequest):
+    """Main agent invocation endpoint"""
     try:
-        user_message = request.input.get("prompt", "")
-        if not user_message:
-            logger.error("No prompt found in input")
-            raise HTTPException(status_code=400, detail="No prompt found in input.")
+        logger.info(f"Received invocation request: {request.input}")
         
-        logger.info(f"User message: {user_message}")
+        user_prompt = request.input.get('prompt', '')
+        logger.info(f"User prompt: {user_prompt}")
         
-        if strands_agent is None:
-            logger.error("Agent failed to initialize at startup")
-            raise HTTPException(status_code=500, detail="Agent failed to initialize.")
+        if not agent:
+            raise HTTPException(status_code=500, detail="Agent not initialized")
         
-        logger.info("Calling Strands Agent...")
-        result = strands_agent(user_message)
-        logger.info("Agent call completed successfully")
-        
-        response = {
-            "message": result.message,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "model": "strands-agent",
-            "gateway_arn": GATEWAY_ARN,
-        }
-        
-        return InvocationResponse(output=response)
-    
+        # Invoke agent
+        try:
+            result = await agent.ainvoke({"input": user_prompt})
+            logger.info(f"Agent result: {result}")
+            
+            # Extract message content
+            message_content = result.get('messages', [{}])[-1] if result.get('messages') else {}
+            
+            response_text = ""
+            if isinstance(message_content, dict):
+                if 'content' in message_content:
+                    content = message_content['content']
+                    if isinstance(content, list) and len(content) > 0:
+                        response_text = content[0].get('text', '')
+                    elif isinstance(content, str):
+                        response_text = content
+            
+            return InvocationResponse(
+                output={
+                    "message": {
+                        "role": "assistant",
+                        "content": response_text,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                }
+            )
+        except Exception as e:
+            logger.error(f"Agent invocation error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
+            
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Agent processing failed: {str(e)}")
+        logger.error(f"Invocation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+# Dashboard KPI Endpoint
+@app.get("/api/dashboard/kpis", response_model=DashboardKPI)
+async def get_dashboard_kpis():
+    """Get real-time dashboard KPIs"""
+    try:
+        # In a real implementation, this would query Athena
+        # For now, returning mock data based on recent database state
+        
+        # Calculate status based on thresholds
+        status = "Operational"  # Can be Operational, Degraded, Critical
+        
+        return DashboardKPI(
+            rrc_success_rate=98.5,
+            active_cells=25,
+            critical_alarms=3,
+            network_load=62.5,
+            status=status
+        )
+    except Exception as e:
+        logger.error(f"Error fetching dashboard KPIs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Cell Status Endpoint
+@app.get("/api/cells/status", response_model=List[CellStatus])
+async def get_cells_status():
+    """Get status of all cells"""
+    try:
+        # In a real implementation, this would query Athena
+        # For now, returning mock data
+        
+        return [
+            CellStatus(
+                cell_id="cell_001",
+                latitude=28.7041,
+                longitude=77.1025,
+                status="Optimal",
+                load_percentage=45,
+                rrc_success_rate=98.5
+            ),
+            CellStatus(
+                cell_id="cell_002",
+                latitude=28.7050,
+                longitude=77.1035,
+                status="Degraded",
+                load_percentage=72,
+                rrc_success_rate=95.2
+            ),
+            CellStatus(
+                cell_id="cell_003",
+                latitude=28.7060,
+                longitude=77.1045,
+                status="Critical",
+                load_percentage=88,
+                rrc_success_rate=92.1
+            )
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching cell status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Time-Series Analytics Endpoint
+@app.get("/api/analytics/timeseries", response_model=List[TimeSeriesData])
+async def get_timeseries_analytics(
+    metric: str = Query("rrc_success_rate"),
+    hours: int = Query(24)
+):
+    """Get time-series analytics data"""
+    try:
+        # In a real implementation, this would query Athena
+        # For now, returning mock data
+        
+        now = datetime.now(timezone.utc)
+        data = []
+        
+        for i in range(hours):
+            timestamp = now - timedelta(hours=hours-i-1)
+            data.append(TimeSeriesData(
+                timestamp=timestamp.isoformat(),
+                rrc_success_rate=98.5 - (i % 5) * 0.3,
+                handover_success_rate=97.2 - (i % 4) * 0.4,
+                throughput_mbps=125.3 + (i % 10) * 2.5
+            ))
+        
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching time-series analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Cell Performance Endpoint
+@app.get("/api/cells/performance", response_model=List[CellPerformance])
+async def get_cell_performance(limit: int = Query(100)):
+    """Get cell performance metrics"""
+    try:
+        # In a real implementation, this would query Athena
+        # For now, returning mock data
+        
+        return [
+            CellPerformance(
+                cell_id="cell_001",
+                rrc_success_rate=98.5,
+                handover_success_rate=97.2,
+                network_load=45,
+                active_alarms=2,
+                status="Optimal"
+            ),
+            CellPerformance(
+                cell_id="cell_002",
+                rrc_success_rate=95.2,
+                handover_success_rate=94.1,
+                network_load=72,
+                active_alarms=5,
+                status="Degraded"
+            ),
+            CellPerformance(
+                cell_id="cell_003",
+                rrc_success_rate=92.1,
+                handover_success_rate=90.5,
+                network_load=88,
+                active_alarms=12,
+                status="Critical"
+            )
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching cell performance: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting RAN Co-pilot Agent on 0.0.0.0:8080")
     uvicorn.run(app, host="0.0.0.0", port=8080)
