@@ -1,5 +1,6 @@
-boto3
-python-dotenv
+bedrock-agentcore
 strands-agents
-pandas
-numpy
+fastapi
+uvicorn
+pydantic
+boto3
