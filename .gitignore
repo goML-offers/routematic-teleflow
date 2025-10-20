@@ -2,7 +2,8 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+ran_copilot_agentcore/scripts/generate_ancillary_data.py
+ran_copilot_agentcore/scripts/generate_synthetic_data.py
 # C extensions
 *.so
 datasets/
