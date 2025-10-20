@@ -7,9 +7,14 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+import sys
+import random
+from mangum import Mangum
 from dotenv import load_dotenv
 import uuid
-import random
+
+# Add parent directory to path for imports
+sys.path.insert(0, '/app')
 
 # Load environment variables
 load_dotenv()
@@ -381,6 +386,9 @@ async def agent_invoke(request: AgentInvokeRequest):
         logger.error(f"Bedrock Agent invocation error: {e}", exc_info=True)
         logger.info("--- Agent Invocation End (with error) ---")
         raise HTTPException(status_code=500, detail=f"Failed to invoke agent: {e}")
+
+# Add Mangum handler for AWS Lambda
+handler = Mangum(app)
 
 if __name__ == "__main__":
     import uvicorn
