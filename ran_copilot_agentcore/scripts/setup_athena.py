@@ -5,56 +5,76 @@ from dotenv import load_dotenv
 # --- Configuration ---
 AWS_REGION = "ap-south-1"
 S3_BUCKET_NAME = "ran-copilot-data-lake"
-DATABASE_NAME = "ran_copilot_db"
+DATABASE_NAME = "ran_copilot"
 S3_OUTPUT_LOCATION = f"s3://{S3_BUCKET_NAME}/athena-query-results/"
 
 # Define the schema and location for each table
 TABLES = {
     "analytics_ue_metrics": {
-        "s3_location": f"s3://{S3_BUCKET_NAME}/",
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/ue_metrics/",
         "columns": [
-            ("time", "string"), ("cc", "int"), ("pci", "int"), ("earfcn", "int"),
-            ("rsrp", "float"), ("pl", "float"), ("cfo", "float"), ("dl_mcs", "int"),
-            ("dl_snr", "float"), ("dl_turbo", "string"), ("dl_brate", "float"),
-            ("dl_bler", "float"), ("ul_ta", "int"), ("ul_mcs", "int"),
-            ("ul_buff", "int"), ("ul_brate", "float"), ("ul_bler", "float"),
-            ("rf_o", "float"), ("rf_u", "float"), ("rf_l", "float"),
-            ("is_attached", "boolean"), ("cluster_id", "string"),
-            ("slicing_id", "string"), ("scheduling_id", "string"),
-            ("reservation_id", "string"), ("ue_id", "string")
+            ("time", "timestamp"),
+            ("cell_id", "string"),
+            ("rrc_success_rate", "float"),
+            ("handover_success_rate", "float"),
+            ("throughput_mbps", "float"),
+            ("network_load", "float"),
+            ("active_alarms", "int"),
+            ("alarm_severity", "string"),
+            ("latitude", "double"),
+            ("longitude", "double")
         ]
     },
-    "recommendation_drive_test": {
-        "s3_location": f"s3://{S3_BUCKET_NAME}/",
+    "analytics_alarms": {
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/alarms/",
         "columns": [
-            ("Timestamp", "timestamp"), ("RSRP_Result", "float"), ("Cell_Identity", "int"),
-            ("PCI", "int"), ("Band", "int"), ("DL_Freq", "int"), ("UL_Freq", "int"),
-            ("DL_BW", "string"), ("UL_BW", "string"), ("TX_Power", "float"), ("Antenna_Gain", "float")
+            ("time", "timestamp"),
+            ("cell_id", "string"),
+            ("alarm_name", "string"),
+            ("alarm_severity", "string")
         ]
     },
-    "forecasting_signal_metrics": {
-        "s3_location": f"s3://{S3_BUCKET_NAME}/",
+    "analytics_config_changes": {
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/config_changes/",
         "columns": [
-            ("Timestamp", "timestamp"), ("Locality", "string"), ("Latitude", "double"),
-            ("Longitude", "double"), ("Signal_Strength_dBm", "float"),
-            ("Signal_Quality_Percent", "float"), ("Data_Throughput_Mbps", "float"),
-            ("Latency_ms", "float"), ("Network_Type", "string"),
-            ("BB60C_Measurement_dBm", "float"), ("srsRAN_Measurement_dBm", "float"),
-            ("BladeRFxA9_Measurement_dBm", "float")
+            ("time", "timestamp"),
+            ("cell_id", "string"),
+            ("parameter_name", "string"),
+            ("old_value", "string"),
+            ("new_value", "string")
         ]
     },
-    "fault_management_alarms": {
-        "s3_location": f"s3://{S3_BUCKET_NAME}/",
+    "analytics_cem_metrics": {
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/cem/",
         "columns": [
-            ("Timestamp", "timestamp"), ("cell_id", "string"),
-            ("alarm_name", "string"), ("severity", "string")
+            ("timestamp", "timestamp"),
+            ("satisfaction_score", "float")
         ]
     },
-    "cem_mos_scores": {
-        "s3_location": f"s3://{S3_BUCKET_NAME}/",
+    "analytics_slice_metrics": {
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/slices/",
         "columns": [
-            ("Timestamp", "timestamp"), ("locality", "string"),
-            ("mean_opinion_score", "float")
+            ("timestamp", "timestamp"),
+            ("slice_id", "string"),
+            ("prb_utilization", "float"),
+            ("throughput_mbps", "float")
+        ]
+    },
+    "analytics_events_metadata": {
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/events_metadata/",
+        "columns": [
+            ("event_id", "string"),
+            ("event_name", "string"),
+            ("event_type", "string"),
+            ("event_date", "timestamp")
+        ]
+    },
+    "analytics_hourly_event_traffic": {
+        "s3_location": f"s3://{S3_BUCKET_NAME}/processed-data/event_traffic/",
+        "columns": [
+            ("event_id", "string"),
+            ("hour_of_day", "int"),
+            ("total_traffic_gb", "float")
         ]
     }
 }
@@ -99,7 +119,22 @@ def main():
     time.sleep(3) 
     print("Database created or already exists.")
     
-    # 2. Create the tables
+    # 2. Drop existing tables to ensure a clean slate with the new schema
+    for table_name in TABLES.keys():
+        print(f"Dropping table if it exists: {table_name}")
+        drop_query = f"DROP TABLE IF EXISTS {DATABASE_NAME}.{table_name};"
+        try:
+            # We run drop queries without the wait logic for simplicity
+            athena.start_query_execution(
+                QueryString=drop_query,
+                QueryExecutionContext={'Database': DATABASE_NAME},
+                ResultConfiguration={'OutputLocation': S3_OUTPUT_LOCATION}
+            )
+            time.sleep(2) # Give it a moment to process
+        except Exception as e:
+            print(f"Could not drop table {table_name}, it might not exist. Error: {e}")
+
+    # 3. Create the tables with the new, correct schema
     for table_name, config in TABLES.items():
         print(f"\nCreating table: {table_name}")
         
