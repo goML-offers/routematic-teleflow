@@ -1,4 +1,4 @@
-# RAN Co-pilot: AI-Driven Telecommunications Network Operations
+# GoML NetworkMatic RANflow: AI-Driven Telecommunications Network Operations Center
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
