@@ -65,37 +65,7 @@ A unified AI agent that:
 
 ### System Design
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Frontend (UI)                         │
-│           AWS Amplify / Your Frontend                   │
-└──────────────┬──────────────────────┬──────────────────┘
-               │                      │
-        HTTP/REST             WebSocket/Chat
-               │                      │
-┌──────────────┴──────────────────────┴──────────────────┐
-│            Backend API (FastAPI)                        │
-│   - Dashboard Endpoints (/api/dashboard/*)             │
-│   - Cell Status (/api/cells/*)                         │
-│   - Agent Proxy (/api/agent/invoke)                    │
-└──────────────┬────────────┬─────────────────────────────┘
-               │            │
-        ┌──────┘            │
-        │          ┌────────┴─────────────────┐
-        │          │                          │
-    Athena      AWS Bedrock               Lambda
-    Queries      AgentCore Runtime         Functions
-        │          + Gateway                │
-        │          + Nova Pro              │
-        │                                   │
-    ┌───┴─────────────────────────────────┴──┐
-    │         S3 Data Lake                    │
-    │  - Analytics Metrics                    │
-    │  - Alarms & Config Changes             │
-    │  - CEM Metrics & Slice Data            │
-    │  - Synthetic & Real Telemetry          │
-    └────────────────────────────────────────┘
-```
+![Architecture Design](images/architecture.png)
 
 ### Components
 
